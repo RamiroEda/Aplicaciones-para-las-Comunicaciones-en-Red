@@ -1,17 +1,12 @@
 import javafx.geometry.Insets
 import javafx.geometry.Pos
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import tornadofx.*
 
 fun main() {
-    val serverJob = GlobalScope.launch {
-        ServerTCP()
-    }
-
     launch<ClientApp>()
-
-    serverJob.cancel()
 }
 
 

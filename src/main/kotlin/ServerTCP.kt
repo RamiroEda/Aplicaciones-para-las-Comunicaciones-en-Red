@@ -1,13 +1,10 @@
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.nio.channels.ServerSocketChannel
-import java.net.InetSocketAddress
-import java.io.RandomAccessFile
+import java.net.*
 import java.nio.ByteBuffer
-import java.nio.channels.SocketChannel
-import java.nio.charset.Charset
+import java.nio.channels.DatagramChannel
 import java.nio.charset.StandardCharsets
+import java.nio.file.Path
 
 
 class ServerTCP {
@@ -15,23 +12,15 @@ class ServerTCP {
         println("Iniciando servidor")
     }
 
-    private val server = ServerSocketChannel.open()
+    private val server = MulticastSocket(3000)
     private var isActive = true
+    private val clientHistory = ArrayList<SocketAddress>()
 
     init {
-        server.configureBlocking(false)
-        server.bind(InetSocketAddress(9001))
+        server.joinGroup(InetAddress.getByName("224.10.10.25"))
 
         while (isActive){
-            val socketChannel = server.accept()
-
-            if(socketChannel != null){
-                println("Cliente en ${socketChannel.remoteAddress}")
-
-                receiveFile(socketChannel)
-
-                socketChannel.close()
-            }
+            receiveFile()
         }
     }
 
@@ -41,33 +30,66 @@ class ServerTCP {
         println("Cerrando server")
     }
 
-    private fun receiveFile(client: SocketChannel) = with(Dispatchers.IO){
-        val buffer = ByteBuffer.allocate(1024)
+    private fun receiveFile() = with(Dispatchers.IO){
+        val filenameBuffer = ByteArray(1024)
+        val fileNamePacket = DatagramPacket(filenameBuffer, filenameBuffer.size)
+        server.receive(fileNamePacket)
 
-        println("Recibiendo nombre del archivo")
+        val clientId = if(clientHistory.contains(fileNamePacket.socketAddress)){
+            clientHistory.indexOf(fileNamePacket.socketAddress)
+        }else{
+            clientHistory.add(fileNamePacket.socketAddress)
+            clientHistory.lastIndex
+        }
 
-        client.read(buffer)
-        buffer.flip()
-        val fileName = StandardCharsets.UTF_8.decode(buffer)
-        buffer.clear()
+        println("Recibiendo nombre del archivo desde ${fileNamePacket.socketAddress}")
+
+        val fileName = "cliente${clientId}_${
+            String(fileNamePacket.data).trim().filter {
+                it.toInt() != 0
+            }
+        }"
 
         println("Nombre del archivo recibido: $fileName")
 
-        println("Recibiendo archivo")
+        val fileSizeBuffer = ByteArray(1024)
+        val fileSizePacket = DatagramPacket(fileSizeBuffer, fileSizeBuffer.size)
+        server.receive(fileSizePacket)
+        val fileSize = ByteBuffer.wrap(fileSizePacket.data).long.toInt()
 
-        val file = File("serverFile/${fileName}").also {
-            println("Creando archivo en ${it.absolutePath}")
+        println("Recibiendo archivo de longitud $fileSize")
+
+        val file = File(Path.of("serverFile", fileName).toUri()).also {
+            if(it.exists()){
+                println("Archivo ya creado, borrando datos")
+                it.delete()
+            }
+
+            println("Creando archivo en '${it.absolutePath}'")
             it.createNewFile()
         }
 
-        val fileChannel = RandomAccessFile(file, "rw").channel
-
-        while (client.read(buffer) > 0) {
-            buffer.flip()
-            fileChannel.write(buffer)
-            buffer.clear()
+        var currentIndex = 0
+        while(currentIndex < fileSize){
+            val next = if (currentIndex+1024 > fileSize){
+                fileSize
+            }else{
+                currentIndex+1024
+            }
+            val fileBuffer = ByteArray(next-currentIndex)
+            val filePacket = DatagramPacket(fileBuffer, fileBuffer.size)
+            server.receive(filePacket)
+            file.appendBytes(filePacket.data)
+            currentIndex = next
         }
-        fileChannel.close()
+
+        for(i in 0 until fileSize){
+            val fileBuffer = ByteArray(1024)
+            val filePacket = DatagramPacket(fileBuffer, fileBuffer.size, fileNamePacket.socketAddress)
+            server.receive(filePacket)
+            file.appendBytes(filePacket.data)
+        }
+
         println("Archivo recibido")
     }
 }
